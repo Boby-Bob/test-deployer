@@ -17,9 +17,8 @@ set('application', 'test-deployer');
 
 // Hosts
 host($_ENV['pro-dev.fr'])
-    ->hostname($_ENV['kevin'])
-    ->port(51150)
-    ->set('deploy_path', '~/projects/test-deployer');
+    ->set('deploy_path', '~/projects/test-deployer')
+    ->port(51150);
 
 // Nombre de déploiements à conserver avant de les supprimer.
 set('keep_releases', 4);
