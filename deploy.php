@@ -1,68 +1,121 @@
 <?php
+
 namespace Deployer;
 
-use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputOption;
-use Symfony\Component\Dotenv\Dotenv;
 
-require_once __DIR__.'/vendor/autoload.php';
+require 'recipe/symfony4.php';
 
-require 'recipe/symfony.php';
+option('all-fixtures', 'a', InputOption::VALUE_NONE, 'Load all fixtures');
 
-$dotenv = new Dotenv();
-$dotenv->loadEnv(__DIR__.'/.env');
+set('repository', 'https://github.com/Boby-Bob/test-deployer.git');
 
-// Le nom de votre projet
-set('application', 'test-deployer');
+// hosts
 
-// Hosts
-host($_ENV['pro-dev.fr'])
-    ->hostname($_ENV['pro-dev.fr'])
-    ->set('deploy_path', '~/projects/test-deployer')
-    ;
+host(getenv('pro-dev.fr'))
+    ->stage('prod')
+    ->port(getenv('51150'))
+    ->user(getenv('kevin'))
+    // user the web server runs as. If this parameter is not configured, deployer try to detect it from the process list.
+    ->set('http_user', getenv('kevin'))
+    // projects directory
+    ->set('projects_dir', 'projects')
+    // projects name
+    ->set('application', 'test-deployer')
+    ->set('deploy_path', '~/projects/test-deployer');
 
-// Nombre de déploiements à conserver avant de les supprimer.
-set('keep_releases', 4);
+// set default stage
+set('default_stage', 'prod');
 
-// Votre repo
-set('repository', $_ENV['test-deployer.pro-dev.fr']);
+// [Optional] Allocate tty for git clone. Default value is false.
+set('git_tty', true);
 
-set('bin_dir', 'bin');
+// shared files / dirs between deploys
+add('shared_files', []);
+add('shared_dirs', []);
 
-set('clear_paths', ['var/cache']);
+// writable dirs by web server
+add('writable_dirs', []);
+set('allow_anonymous_stats', false);
 
-add('shared_files', []); // vous pouvez ajouter des fichiers partagés et surcharger la recette de base
-add('shared_dirs', []); // vous pouvez ajouter des dossiers partagés et surcharger la recette de base
+// writable mode
+//
+// - acl (default) use setfacl for changing ACL of dirs.
+// - chmod use unix chmod command,
+// - chown use unix chown command,
+// - chgrp use unix chgrp command,
+set('writable_mode', 'chmod');
 
-// vous pouvez surcharger la recette de base en réécrivant la fonction
-task('deploy:vendors', function () {
-    if (!commandExist('unzip')) {
-        writeln('To speed up composer installation setup "unzip" command with PHP zip extension https://goo.gl/sxzFcD');
-    }
-    run('cd {{release_path}} && {{bin/composer}} install --verbose --prefer-dist --no-progress --no-interaction --optimize-autoloader');
+// whether to use sudo with writable command. Default to false.
+set('writable_use_sudo', false);
 
+// tasks
+
+// [optional] if deploy fails automatically unlock.
+after('deploy:failed', 'deploy:unlock');
+
+// migrate database before symlink new release.
+before('deploy:symlink', 'database:migrate');
+
+desc('Test deployer');
+task('test:hello', function () {
+    writeln('Hello world');
 });
 
-task('deploy:assets:install', function () {
-    run('{{bin/php}} {{bin/console}} assets:install {{console_options}} --symlink');
-})->desc('Install bundle assets');
+desc('Get server hostname');
+task('test:hostname', function () {
+    $result = run('cat /etc/hostname');
+    writeln("$result");
+});
 
-task('deploy', [
-    'deploy:info',
-    'deploy:prepare',
-    'deploy:lock',
-    'deploy:release',
-    'deploy:update_code',
-    'deploy:clear_paths',
-    'deploy:shared',
-    'deploy:vendors',
-    'deploy:cache:clear',
-    'deploy:cache:warmup',
-    'deploy:writable',
-    'deploy:assets:install',
-    'deploy:symlink',
-    'deploy:unlock',
-    'cleanup',
-])->desc('Deploy your project');
+desc('Copy .env.{{stage}}.local as .env.local');
+task('deploy:env', function () {
+    upload('.env.{{stage}}.local', '~/{{projects_dir}}/{{application}}/shared/.env.local');
+});
 
-after('deploy:failed', 'deploy:unlock');
+desc('Clean git files');
+task('clean:git-files', function () {
+    run('rm -fr ~/{{projects_dir}}/{{application}}/current/.git');
+});
+
+desc('Load fixtures');
+task('fixtures:load', function () {
+    $allFixtures = null;
+
+    if (input()->hasOption('all-fixtures')) {
+        $allFixtures = input()->getOption('all-fixtures');
+    }
+
+    if ($allFixtures) {
+        if (get('stage') == 'prod') {
+            writeln("Loading all fixtures");
+            $result = run('{{bin/console}} doctrine:fixtures:load --no-interaction --append');
+            writeln("$result");
+        } else { // get('stage') != 'prod'
+            writeln("Loading all fixtures");
+            $result = run('{{bin/console}} doctrine:fixtures:load --no-interaction --purge-with-truncate');
+            writeln("$result");
+        }
+    } else {
+        if (get('stage') == 'prod') {
+            writeln("Loading required fixtures");
+            $result = run('{{bin/console}} doctrine:fixtures:load --no-interaction --group=required --append');
+            writeln("$result");
+        } else { // get('stage') != 'prod'
+            writeln("Loading test fixtures");
+            $result = run('{{bin/console}} doctrine:fixtures:load --no-interaction --group=test --purge-with-truncate');
+            writeln("$result");
+        }
+    }
+});
+
+desc('Rollback database');
+task('database:rollback', function () {
+    $options = '--allow-no-migration';
+    if (get('migrations_config') !== '') {
+        $options = sprintf('%s --configuration={{release_path}}/{{migrations_config}}', $options);
+    }
+    run(sprintf('{{bin/console}} doctrine:migrations:migrate prev %s', $options));
+});
+
+after('deploy', 'clean:git-files');
