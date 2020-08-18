@@ -39,8 +39,3 @@ after('deploy:failed', 'deploy:unlock');
 
 before('deploy:symlink', 'database:migrate');
 
-set('console_options', function () {
-    $options = '--no-interaction --env={{env}}';
-
-    return get('env') !== 'prod' ? $options : sprintf('%s --no-debug', $options);
-});
